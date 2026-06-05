@@ -387,8 +387,62 @@ function formatarDataIso(data) {
   return `${ano}-${mes}-${dia}`;
 }
 
+function calcularPascoa(ano) {
+  const a = ano % 19;
+  const b = Math.floor(ano / 100);
+  const c = ano % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(ano, month - 1, day);
+}
+
+function calcularSextaFeiraSanta(ano) {
+  const pascoa = calcularPascoa(ano);
+  const sexta = new Date(pascoa);
+  sexta.setDate(sexta.getDate() - 2);
+  return formatarDataIso(sexta);
+}
+
+function calcularCorpusChristi(ano) {
+  const pascoa = calcularPascoa(ano);
+  const corpus = new Date(pascoa);
+  corpus.setDate(corpus.getDate() + 60);
+  return formatarDataIso(corpus);
+}
+
+function feriadosNacionaisBrasileiros(ano) {
+  return [
+    `${ano}-01-01`,
+    calcularSextaFeiraSanta(ano),
+    `${ano}-04-21`,
+    calcularCorpusChristi(ano),
+    `${ano}-05-01`,
+    `${ano}-09-07`,
+    `${ano}-10-12`,
+    `${ano}-11-02`,
+    `${ano}-11-15`,
+    `${ano}-11-20`,
+    `${ano}-12-25`,
+  ];
+}
+
 function isFeriadoExcluido(data) {
-  return CONFIG.feriadosExcluidos.includes(formatarDataIso(data));
+  const iso = formatarDataIso(data);
+  const ano = data.getFullYear();
+
+  if (CONFIG?.feriadosExcluidos?.includes(iso)) return true;
+  if (feriadosNacionaisBrasileiros(ano).includes(iso)) return true;
+
+  return false;
 }
 
 function formatarJanelaAberta() {
@@ -434,6 +488,19 @@ function parsearTituloMes(texto) {
 }
 
 async function obterMesAnoCalendario(page) {
+  const regexTituloCalendario =
+    /^(janeiro|fevereiro|março|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\s+\d{4}$/i;
+
+  const tituloCalendario = page.locator('div, span, h1, h2, h3, h4').filter({ hasText: regexTituloCalendario });
+  const totalTitulos = await tituloCalendario.count();
+
+  for (let i = 0; i < totalTitulos; i++) {
+    const texto = (await tituloCalendario.nth(i).innerText()).trim();
+    const linha = texto.split('\n').map((l) => l.trim()).find((l) => regexTituloCalendario.test(l)) || texto;
+    const parsed = parsearTituloMes(linha);
+    if (parsed) return parsed;
+  }
+
   const candidatos = page.locator('h1, h2, h3, h4, [class*="title"], [class*="Title"]');
   const total = await candidatos.count();
 
@@ -442,10 +509,6 @@ async function obterMesAnoCalendario(page) {
     const parsed = parsearTituloMes(texto);
     if (parsed) return parsed;
   }
-
-  const corpo = (await page.locator('body').innerText()).slice(0, 5000);
-  const parsedCorpo = parsearTituloMes(corpo);
-  if (parsedCorpo) return parsedCorpo;
 
   const agora = new Date();
   const nomeFallback = NOMES_MESES[agora.getMonth()];
@@ -974,6 +1037,139 @@ function calcularDistribuicaoHoras(horasJaApontadas, diasUteis, limiteHoras) {
   };
 }
 
+async function fecharDialogsAbertos(page) {
+  await fecharModalNotificacoesSeExistir(page);
+
+  for (let i = 0; i < 3; i += 1) {
+    const dialog = page.locator('[role="dialog"]').first();
+    if (!(await dialog.isVisible().catch(() => false))) {
+      break;
+    }
+
+    const fechar = page.getByRole('button', { name: /fechar|cancelar|ok|close/i }).first();
+    if ((await fechar.count()) > 0 && (await fechar.isVisible().catch(() => false))) {
+      await fechar.click().catch(() => {});
+    } else {
+      await page.keyboard.press('Escape');
+    }
+
+    await page.waitForTimeout(300);
+  }
+}
+
+function calcularMesAnterior(mes, ano) {
+  if (mes === 1) return { mes: 12, ano: ano - 1 };
+  return { mes: mes - 1, ano };
+}
+
+function calcularMesProximo(mes, ano) {
+  if (mes === 12) return { mes: 1, ano: ano + 1 };
+  return { mes: mes + 1, ano };
+}
+
+async function navegarCalendario(page, direcao) {
+  await fecharDialogsAbertos(page);
+
+  const rotulos =
+    direcao === 'anterior'
+      ? ['Mês anterior', 'Mes anterior']
+      : ['Próximo mês', 'Proximo mes'];
+
+  for (const rotulo of rotulos) {
+    const botao = page.getByRole('button', { name: rotulo, exact: true });
+    if ((await botao.count()) > 0 && (await botao.first().isVisible().catch(() => false))) {
+      await botao.first().click({ force: true });
+      await page.waitForTimeout(1500);
+      await page.locator('td').first().waitFor({ state: 'visible', timeout: 8000 }).catch(() => {});
+      return;
+    }
+  }
+
+  throw new Error(`Botão de navegação "${direcao === 'anterior' ? 'Mês anterior' : 'Próximo mês'}" não encontrado`);
+}
+
+async function navegarParaMesAnterior(page, mesReferencia, anoReferencia) {
+  console.log('[INFO] Navegando para o mês anterior...');
+  const esperado = calcularMesAnterior(mesReferencia, anoReferencia);
+
+  await navegarCalendario(page, 'anterior');
+
+  const cal = await obterMesAnoCalendario(page);
+  if (cal.mes !== esperado.mes || cal.ano !== esperado.ano) {
+    throw new Error(
+      `Navegação incorreta: esperado ${esperado.mes}/${esperado.ano}, obtido ${cal.mes}/${cal.ano}`
+    );
+  }
+
+  console.log(`[INFO] Calendário atual após navegação: ${cal.nomeMes}/${cal.ano}`);
+  return cal;
+}
+
+async function voltarParaMesAtual(page, mesEsperado, anoEsperado) {
+  console.log('[INFO] Voltando para o mês atual...');
+  let tentativas = 0;
+
+  while (tentativas < 6) {
+    await fecharDialogsAbertos(page);
+
+    const cal = await obterMesAnoCalendario(page);
+    if (cal.mes === mesEsperado && cal.ano === anoEsperado) {
+      console.log(`[INFO] Calendário atual após retorno: ${cal.nomeMes}/${cal.ano}`);
+      return;
+    }
+
+    await navegarCalendario(page, 'proximo');
+    tentativas += 1;
+  }
+
+  throw new Error(`Não foi possível retornar ao mês ${mesEsperado}/${anoEsperado}`);
+}
+
+async function calcularHorasPeriodoPrev(page, diaInicio, diaFim) {
+  console.log(`[INFO] Lendo horas do período ${diaInicio}–${diaFim} do mês visível...`);
+  let totalMinutos = 0;
+
+  try {
+    await page.locator('td').first().waitFor({ state: 'visible', timeout: 8000 });
+    const celulas = page.locator('td');
+    const total = await celulas.count();
+
+    for (let i = 0; i < total; i++) {
+      const celula = celulas.nth(i);
+      const visivel = await celula.isVisible().catch(() => false);
+      if (!visivel) continue;
+
+      if (!(await celulaPertenceAoMesAtual(celula))) {
+        continue;
+      }
+
+      const texto = await celula.innerText().catch(() => '');
+      const linhas = texto
+        .split('\n')
+        .map((linha) => linha.trim())
+        .filter(Boolean);
+      const numeroDia = extrairNumeroDiaDasLinhas(linhas);
+      if (numeroDia === undefined) continue;
+
+      const diaCelula = Number(numeroDia);
+      if (diaCelula < diaInicio || diaCelula > diaFim) continue;
+
+      const matches = [...texto.matchAll(/(\d{2}):(\d{2})\s*[-–]\s*(\d{2}):(\d{2})/g)];
+      for (const m of matches) {
+        const inicioMin = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+        const fimMin = parseInt(m[3], 10) * 60 + parseInt(m[4], 10);
+        if (fimMin > inicioMin) totalMinutos += fimMin - inicioMin;
+      }
+    }
+  } catch (err) {
+    console.log(`[WARN] Erro ao ler horas do período: ${err.message}`);
+  }
+
+  const totalHoras = totalMinutos / 60;
+  console.log(`[INFO] Horas encontradas no período ${diaInicio}–${diaFim}: ${totalHoras.toFixed(2)}h`);
+  return totalHoras;
+}
+
 async function main() {
   const usuario = process.env.ROSIE_USUARIO;
   const senha = process.env.ROSIE_SENHA;
@@ -1075,72 +1271,67 @@ async function main() {
     );
 
     // --- 184h rule ---
-    const LIMITE_HORAS = parseFloat(process.env.LIMITE_HORAS || '184');
-    const intervalos = obterIntervalos184(calendario);
+    const LIMITE_HORAS_MES = parseFloat(process.env.LIMITE_HORAS || '184');
 
-    const horasIntervaloA = await calcularHorasNoCalendario(page, intervalos.intervaloA.filtro);
-    const horasIntervaloB = await calcularHorasNoCalendario(page, intervalos.intervaloB.filtro);
+    const calendarioAtual = await obterMesAnoCalendario(page);
+    const mesAtual = calendarioAtual.mes;
+    const anoAtual = calendarioAtual.ano;
 
+    await navegarParaMesAnterior(page, mesAtual, anoAtual);
+    const ultimoDiaMesAnterior = new Date(anoAtual, mesAtual - 1, 0).getDate();
+    const horasPeriodoPrev = await calcularHorasPeriodoPrev(page, 21, ultimoDiaMesAnterior);
     console.log(
-      `[INFO] Intervalo A (${intervalos.intervaloA.label}): ${horasIntervaloA.toFixed(2)}h / ${LIMITE_HORAS}h`
+      `[INFO] Intervalo A — horas no período 21–${ultimoDiaMesAnterior} do mês anterior: ${horasPeriodoPrev.toFixed(2)}h`
     );
+
+    await voltarParaMesAtual(page, mesAtual, anoAtual);
+
+    const horasRestantes = Math.max(0, LIMITE_HORAS_MES - horasPeriodoPrev);
     console.log(
-      `[INFO] Intervalo B (${intervalos.intervaloB.label}): ${horasIntervaloB.toFixed(2)}h / ${LIMITE_HORAS}h`
+      `[INFO] Horas restantes para completar ${LIMITE_HORAS_MES}h: ${horasRestantes.toFixed(2)}h`
     );
-
-    const restanteA = Math.max(0, LIMITE_HORAS - horasIntervaloA);
-    const restanteB = Math.max(0, LIMITE_HORAS - horasIntervaloB);
-    const horasRestantesNecessarias = Math.max(restanteA, restanteB);
-
-    if (restanteA <= 0 && restanteB <= 0) {
-      console.log('[INFO] Encerrando — ambos os intervalos já atingiram 184h.');
-      return;
-    }
 
     const diasUteisRestantes = diasParaProcessar.filter(({ dia, mes, ano }) => {
+      if (dia > 20) return false;
       const data = criarData(ano, mes, dia);
       return isDiaUtil(data) && !isFeriadoExcluido(data);
     });
 
-    const horasReferenciaDistribuicao = LIMITE_HORAS - horasRestantesNecessarias;
     const distribuicao = calcularDistribuicaoHoras(
-      horasReferenciaDistribuicao,
+      horasPeriodoPrev,
       diasUteisRestantes,
-      LIMITE_HORAS
+      LIMITE_HORAS_MES
     );
+
+    if (!distribuicao.podeApontar && horasRestantes <= 0) {
+      console.log(
+        `[INFO] Período 21/prev→20/curr já totaliza ${LIMITE_HORAS_MES}h. Nenhum apontamento necessário.`
+      );
+      return;
+    }
 
     if (!distribuicao.podeApontar) {
       console.log('[INFO] Encerrando — nenhum apontamento necessário.');
       return;
     }
 
-    if (!process.env.ALMOCO_INICIO) {
+    if (!process.env.ALMOCO_INICIO && distribuicao.almocoInicioAjustado) {
       APONTAMENTO_PADRAO.almocoInicio = distribuicao.almocoInicioAjustado;
     }
-    if (!process.env.HORA_SAIDA) {
+    if (!process.env.HORA_SAIDA && distribuicao.saidaCalculada) {
       APONTAMENTO_PADRAO.saida = distribuicao.saidaCalculada;
+      console.log(
+        `[INFO] Horário de saída ajustado para ${APONTAMENTO_PADRAO.saida} (distribuição ${LIMITE_HORAS_MES}h)`
+      );
     }
 
     relatorio184 = {
-      limite: LIMITE_HORAS,
-      horasJaApontadas: horasIntervaloB,
-      intervaloA: {
-        horas: horasIntervaloA,
-        restante: restanteA,
-        label: intervalos.intervaloA.label,
-      },
-      intervaloB: {
-        horas: horasIntervaloB,
-        restante: restanteB,
-        label: intervalos.intervaloB.label,
-      },
+      limite: LIMITE_HORAS_MES,
+      horasPeriodoPrev,
+      horasRestantes,
+      horasJaApontadas: horasPeriodoPrev,
       distribuicao,
     };
-
-    console.log(
-      `[INFO] Horários ajustados — manhã até ${APONTAMENTO_PADRAO.almocoInicio}, ` +
-        `tarde até ${APONTAMENTO_PADRAO.saida} (regra 184h, máx ${process.env.HORAS_DIA_MAX || '8'}h/dia)`
-    );
     // --- end 184h rule ---
 
     for (const diaObj of diasParaProcessar) {
