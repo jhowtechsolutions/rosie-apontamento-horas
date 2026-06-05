@@ -1,0 +1,123 @@
+﻿name: ROSIE Apontamento de Horas
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry-run (true = simulate, false = save for real)'
+        required: false
+        default: 'true'
+      dias:
+        description: 'Specific days to process (e.g. 1,2,3) — leave empty for auto'
+        required: false
+        default: ''
+      limite_horas:
+        description: 'Monthly hour limit (default: 184)'
+        required: false
+        default: '184'
+
+  # Every Monday at 09:00 BRT (12:00 UTC)
+  schedule:
+    - cron: '0 12 * * 1'
+
+jobs:
+  apontar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium --with-deps
+
+      - name: Run ROSIE automation
+        id: rosie
+        env:
+          ROSIE_USUARIO: ${{ secrets.ROSIE_USUARIO }}
+          ROSIE_SENHA: ${{ secrets.ROSIE_SENHA }}
+          CLIENTE: ${{ secrets.CLIENTE }}
+          PROJETO: ${{ secrets.PROJETO }}
+          EDT: ${{ secrets.EDT }}
+          ATIVIDADE: ${{ secrets.ATIVIDADE }}
+          HORA_ENTRADA: ${{ vars.HORA_ENTRADA || '08:00' }}
+          ALMOCO_INICIO: ${{ vars.ALMOCO_INICIO || '12:00' }}
+          ALMOCO_DURACAO_MIN: ${{ vars.ALMOCO_DURACAO_MIN || '60' }}
+          HORA_SAIDA: ${{ vars.HORA_SAIDA || '17:00' }}
+          HORAS_DIA_MAX: ${{ vars.HORAS_DIA_MAX || '8' }}
+          LIMITE_HORAS: ${{ github.event.inputs.limite_horas || vars.LIMITE_HORAS || '184' }}
+          OBSERVACAO: ${{ vars.OBSERVACAO || 'Desenvolvimento de atividades alocadas no cliente Unimed' }}
+          REPORT_FILE: report.json
+        run: |
+          ARGS=""
+
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ] || [ "${{ github.event_name }}" = "schedule" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+
+          if [ -n "${{ github.event.inputs.dias }}" ]; then
+            ARGS="$ARGS --dias=${{ github.event.inputs.dias }}"
+          fi
+
+          echo "Running: node apontar.js $ARGS"
+          node apontar.js $ARGS
+
+      - name: Send email report
+        if: always()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          secure: false
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          to: art_jonathan@unimedcampinas.com.br
+          from: ROSIE Automação <${{ secrets.MAIL_USERNAME }}>
+          subject: "ROSIE — Relatório semanal ${{ github.run_number }} (${{ github.event_name == 'schedule' && 'agendado' || 'manual' }})"
+          body: |
+            Olá Jonathan,
+
+            Segue o relatório de execução do ROSIE referente à segunda-feira de hoje.
+
+            ──────────────────────────────────
+            EXECUÇÃO
+            ──────────────────────────────────
+            Data/hora : ${{ github.event.repository.updated_at }}
+            Trigger   : ${{ github.event_name }}
+            Dry-run   : ${{ github.event.inputs.dry_run || 'true (agendado)' }}
+            Workflow  : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            ──────────────────────────────────
+            DETALHES DO RELATÓRIO
+            ──────────────────────────────────
+            O relatório completo com horas apontadas, dias processados,
+            distribuição e totais dos períodos 21/mês-anterior→20/mês-atual
+            e 01/mês-atual→último dia do mês está disponível nos logs:
+
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            ──────────────────────────────────
+            STATUS
+            ──────────────────────────────────
+            ${{ job.status == 'success' && '✅ Execução concluída com sucesso.' || '❌ Execução falhou — verifique os logs.' }}
+
+            --
+            ROSIE Automação | GitHub Actions
+
+      - name: Upload failure screenshot
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshot-falha
+          path: screenshots/
+          retention-days: 7

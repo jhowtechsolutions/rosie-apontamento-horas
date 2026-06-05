@@ -1,0 +1,16 @@
+﻿{
+  "name": "rosie-apontamento-horas",
+  "version": "1.0.0",
+  "description": "Automação mínima de apontamento de horas no ROSIE",
+  "main": "apontar.js",
+  "scripts": {
+    "start": "node apontar.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "playwright": "^1.60.0"
+  }
+}
