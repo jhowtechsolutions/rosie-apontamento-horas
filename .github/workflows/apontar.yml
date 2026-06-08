@@ -16,7 +16,7 @@ on:
         required: false
         default: '184'
   schedule:
-    - cron: '55 13 * * *'
+    - cron: '15 14 * * *'
 
 jobs:
   apontar:
