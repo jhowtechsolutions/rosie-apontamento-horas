@@ -1,6 +1,8 @@
 ﻿name: ROSIE Apontamento de Horas
 
 on:
+  schedule:
+    - cron: '30 16 * * 1'
   workflow_dispatch:
     inputs:
       dry_run:
@@ -8,21 +10,18 @@ on:
         required: false
         default: 'true'
       dias:
-        description: 'Specific days to process (e.g. 1,2,3) — leave empty for auto'
+        description: 'Specific days to process'
         required: false
         default: ''
       limite_horas:
-        description: 'Monthly hour limit (default: 184)'
+        description: 'Monthly hour limit'
         required: false
         default: '184'
-  schedule:
-    - cron: '15 14 * * *'
 
 jobs:
   apontar:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -40,7 +39,6 @@ jobs:
         run: npx playwright install chromium --with-deps
 
       - name: Run ROSIE automation
-        id: rosie
         env:
           ROSIE_USUARIO: ${{ secrets.ROSIE_USUARIO }}
           ROSIE_SENHA: ${{ secrets.ROSIE_SENHA }}
@@ -58,15 +56,12 @@ jobs:
           REPORT_FILE: report.json
         run: |
           ARGS=""
-
           if [ "${{ github.event.inputs.dry_run }}" = "true" ] || [ "${{ github.event_name }}" = "schedule" ]; then
             ARGS="$ARGS --dry-run"
           fi
-
           if [ -n "${{ github.event.inputs.dias }}" ]; then
             ARGS="$ARGS --dias=${{ github.event.inputs.dias }}"
           fi
-
           echo "Running: node apontar.js $ARGS"
           node apontar.js $ARGS
 
@@ -85,32 +80,15 @@ jobs:
           body: |
             Olá Jonathan,
 
-            Segue o relatório de execução do ROSIE referente à segunda-feira de hoje.
+            Execução do ROSIE concluída.
 
-            ──────────────────────────────────
-            EXECUÇÃO
-            ──────────────────────────────────
-            Data/hora : ${{ github.event.repository.updated_at }}
-            Trigger   : ${{ github.event_name }}
-            Dry-run   : ${{ github.event.inputs.dry_run || 'true (agendado)' }}
-            Workflow  : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            Trigger: ${{ github.event_name }}
+            Dry-run: ${{ github.event.inputs.dry_run || 'true (agendado)' }}
+            Logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-            ──────────────────────────────────
-            DETALHES DO RELATÓRIO
-            ──────────────────────────────────
-            O relatório completo com horas apontadas, dias processados,
-            distribuição e totais dos períodos 21/mês-anterior→20/mês-atual
-            e 01/mês-atual→último dia do mês está disponível nos logs:
+            Status: ${{ job.status }}
 
-            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-            ──────────────────────────────────
-            STATUS
-            ──────────────────────────────────
-            ${{ job.status == 'success' && '✅ Execução concluída com sucesso.' || '❌ Execução falhou — verifique os logs.' }}
-
-            --
-            ROSIE Automação | GitHub Actions
+            -- ROSIE Automação | GitHub Actions
 
       - name: Upload failure screenshot
         if: failure()
