@@ -15,10 +15,8 @@ on:
         description: 'Monthly hour limit (default: 184)'
         required: false
         default: '184'
-
-  # Every Monday at 09:00 BRT (12:00 UTC)
   schedule:
-    - cron: '25 13 * * *'
+    - cron: '55 13 * * *'
 
 jobs:
   apontar:
