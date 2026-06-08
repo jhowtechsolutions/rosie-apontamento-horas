@@ -18,7 +18,7 @@ on:
 
   # Every Monday at 09:00 BRT (12:00 UTC)
   schedule:
-    - cron: '0 12 * * 1'
+    - cron: '25 13 * * *'
 
 jobs:
   apontar:
